@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Real-time garment defect inspection dashboard with live camera feed and YOLO inference.">
+    <title>Edge — Garment Inspection Unit</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <header>
+        <div class="logo-container">
+            <div class="logo-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                    <circle cx="12" cy="13" r="4"/>
+                </svg>
+            </div>
+            <h1>Garment Inspection Unit</h1>
+        </div>
+        <div style="display: flex; gap: 0.8rem; align-items: center;">
+            <div class="status-badge" style="border-color: rgba(16, 185, 129, 0.2); background: rgba(16, 185, 129, 0.04);">
+                <span class="status-dot" id="syncDot"></span>
+                <span id="syncText" style="font-weight: 700;">Connecting...</span>
+            </div>
+            <div class="status-badge" style="background: rgba(139, 92, 246, 0.06); border-color: rgba(139, 92, 246, 0.2);">
+                <span style="color: var(--text-secondary); margin-right: 5px;">Device:</span>
+                <span id="deviceId" style="color: #c084fc; font-weight: 800;">—</span>
+            </div>
+            <div class="status-badge" id="cameraModeTag">
+                <span id="cameraMode" style="font-weight: 700;">Initializing...</span>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <!-- ── Left Column: Camera & Controls ── -->
+        <section class="glass-card" style="gap: 0;">
+
+            <!-- Card Header -->
+            <div class="card-header">
+                <span>Live Inspection View</span>
+                <span id="viewportStatus" style="font-size: 0.78rem; color: var(--text-secondary); font-weight: 600; text-transform: none; letter-spacing: 0;">Awaiting Feed</span>
+            </div>
+
+            <!-- Viewport: live canvas feed + overlay -->
+            <div class="viewport-container">
+                <!-- Canvas is now the sole display surface (WebSocket frames rendered here) -->
+                <canvas id="overlayCanvas" style="display: none;"></canvas>
+                <!-- Placeholder when no feed / no scan -->
+                <div id="viewportPlaceholder" style="
+                    position: absolute; inset: 0;
+                    display: flex; flex-direction: column; align-items: center; justify-content: center;
+                    gap: 0.8rem; color: var(--text-secondary); font-size: 0.9rem;
+                    background: linear-gradient(135deg, #090615 0%, #030208 100%);
+                ">
+                    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="rgba(139,92,246,0.4)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 3l-4 4-4-4"/>
+                    </svg>
+                    <span style="font-weight: 600; letter-spacing: 0.3px;">Start live feed or trigger a scan</span>
+                </div>
+
+                <!-- LIVE badge overlay -->
+                <div class="live-badge" id="liveBadge">
+                    <span class="live-dot"></span> LIVE
+                </div>
+
+                <!-- Laser Scanner Line animation -->
+                <div class="laser-scanner"></div>
+
+                <!-- FPS counter -->
+                <div id="fpsCounter" style="
+                    position: absolute; top: 12px; right: 12px;
+                    font-size: 0.7rem; font-weight: 800; font-family: monospace;
+                    color: var(--color-clean); background: rgba(3,2,8,0.7);
+                    padding: 3px 8px; border-radius: 4px; letter-spacing: 0.5px;
+                    pointer-events: none; border: 1px solid rgba(255,255,255,0.04);
+                "></div>
+
+                <!-- HUD corner brackets -->
+                <div class="viewport-corner tl"></div>
+                <div class="viewport-corner tr"></div>
+                <div class="viewport-corner bl"></div>
+                <div class="viewport-corner br"></div>
+            </div>
+
+            <!-- Control Bar -->
+            <div class="control-bar" style="flex-wrap: wrap; gap: 0.6rem;">
+                <button class="btn btn-live" id="liveBtn">
+                    📹 Start Live Feed
+                </button>
+                <button class="btn btn-primary" id="scanBtn">
+                    📷 Trigger Scan
+                </button>
+                <button class="btn btn-secondary" id="uploadBatchBtn" style="flex: 1;">
+                    📁 Batch
+                </button>
+                <input type="file" id="batchUploadInput" multiple accept="image/*" style="display: none;">
+                <label class="live-infer-toggle" style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; font-weight: 700; color: var(--text-secondary); cursor: pointer; padding: 0.6rem 0.9rem; background: rgba(255,255,255,0.02); border: 1px dashed rgba(255,255,255,0.08); border-radius: 10px; transition: border-color 0.2s ease;">
+                    <input type="checkbox" id="liveInferCheck" style="accent-color: var(--accent); cursor: pointer; width: 14px; height: 14px;">
+                    Live YOLO Overlay
+                </label>
+            </div>
+
+            <!-- Batch Scans Container (hidden until batch uploaded) -->
+            <div class="batch-container" id="batchScansContainer" style="display: none;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.8rem; font-size: 0.75rem; font-weight: 800; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 1px;">
+                    <span>Batch Scans (<span id="batchCount">0</span>)</span>
+                    <span style="font-size: 0.72rem; font-weight: 500; text-transform: none; letter-spacing: 0;">Click to inspect</span>
+                </div>
+                <div id="batchScansList"></div>
+            </div>
+
+            <!-- Pan-Tilt Controls -->
+            <div class="joystick-panel">
+                <div class="glass-card" style="padding: 1.1rem; align-items: center; background: rgba(0,0,0,0.15); border-color: rgba(139,92,246,0.12);">
+                    <div class="card-header" style="font-size: 0.75rem; width: 100%; text-align: center; justify-content: center; margin-bottom: 0.8rem;">
+                        Pan-Tilt Control
+                    </div>
+                    <div class="joystick-pad">
+                        <div></div>
+                        <button class="joy-btn" onclick="movePT(0, 15)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="18 15 12 9 6 15"/></svg>
+                        </button>
+                        <div></div>
+                        <button class="joy-btn" onclick="movePT(-15, 0)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="15 18 9 12 15 6"/></svg>
+                        </button>
+                        <button class="joy-btn joy-center" onclick="movePT(0, 0)" title="Reset">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
+                        </button>
+                        <button class="joy-btn" onclick="movePT(15, 0)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="9 18 15 12 9 6"/></svg>
+                        </button>
+                        <div></div>
+                        <button class="joy-btn" onclick="movePT(0, -15)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><polyline points="6 9 12 15 18 9"/></svg>
+                        </button>
+                        <div></div>
+                    </div>
+                    <div style="font-size: 0.75rem; margin-top: 0.8rem; color: var(--text-secondary); text-align: center;">
+                        <span id="currentAngles" style="color: #c084fc; font-weight: 700;">Pan: 0°, Tilt: 0°</span>
+                    </div>
+                </div>
+
+                <div class="glass-card" style="padding: 1.1rem; background: rgba(0,0,0,0.15); border-color: rgba(139,92,246,0.12);">
+                    <div class="card-header" style="font-size: 0.75rem; margin-bottom: 0.8rem;">
+                        Presets
+                    </div>
+                    <div class="preset-grid">
+                        <button class="preset-btn" onclick="setPreset('center')">Center</button>
+                        <button class="preset-btn" onclick="setPreset('top_left')">↖ Top Left</button>
+                        <button class="preset-btn" onclick="setPreset('top_right')">↗ Top Right</button>
+                        <button class="preset-btn" onclick="setPreset('bottom_left')">↙ Bot Left</button>
+                        <button class="preset-btn" onclick="setPreset('bottom_right')">↘ Bot Right</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ── Right Column ── -->
+        <div style="display: flex; flex-direction: column; gap: 1.4rem;">
+
+            <!-- Model Tuning Panel -->
+            <section class="glass-card" style="padding: 1.25rem;">
+                <div class="card-header" style="margin-bottom: 0.8rem;">
+                    <span>Model Tuning</span>
+                    <span style="font-size: 0.72rem; color: var(--cyan); font-weight: 700; text-transform: uppercase;">Real-Time</span>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+                    <div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.25rem;">
+                            <label style="margin-bottom: 0; font-size: 0.68rem; font-weight: 700; text-transform: uppercase; color: var(--text-secondary);">Confidence Threshold</label>
+                            <span id="confVal" style="color: var(--cyan); font-weight: 800; font-size: 0.85rem; font-family: monospace;">0.25</span>
+                        </div>
+                        <input type="range" id="confSlider" min="0.05" max="1.00" step="0.05" value="0.25" style="width: 100%; cursor: pointer;">
+                    </div>
+                    <div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.25rem;">
+                            <label style="margin-bottom: 0; font-size: 0.68rem; font-weight: 700; text-transform: uppercase; color: var(--text-secondary);">IoU NMS Threshold</label>
+                            <span id="iouVal" style="color: var(--cyan); font-weight: 800; font-size: 0.85rem; font-family: monospace;">0.70</span>
+                        </div>
+                        <input type="range" id="iouSlider" min="0.10" max="1.00" step="0.05" value="0.70" style="width: 100%; cursor: pointer;">
+                    </div>
+                    <div>
+                        <label for="imgszSelect" style="margin-bottom: 0.25rem; font-size: 0.68rem;">Inference Image Resolution</label>
+                        <select id="imgszSelect">
+                            <option value="320">320px x 320px (Fast)</option>
+                            <option value="640" selected>640px x 640px (Standard)</option>
+                            <option value="960">960px x 960px (Precise)</option>
+                            <option value="1280">1280px x 1280px (Ultra)</option>
+                        </select>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ── Inspection Results ── -->
+            <section class="glass-card results-card" style="flex: 1; min-height: 480px;">
+                <div class="card-header">
+                    <span>Inspection Results</span>
+                    <span id="scanStatusBadge" style="font-size: 0.75rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); background: none;">Awaiting Scan</span>
+                </div>
+
+                <!-- Summary Banner -->
+                <div id="defectSummary" class="defect-summary-box summary-unknown" style="margin-bottom: 0.8rem; padding: 0.8rem 1rem;">
+                    <span>No active scan. Run scan to inspect.</span>
+                </div>
+
+                <!-- Garment Classification -->
+                <div class="form-group" style="margin-bottom: 0.8rem;">
+                    <label for="garmentTypeSelect">Garment Classification</label>
+                    <select id="garmentTypeSelect">
+                        <option value="unknown">Unknown / Select Type</option>
+                        <option value="shirt">Shirt</option>
+                        <option value="jacket">Jacket</option>
+                        <option value="jeans">Jeans</option>
+                        <option value="underwear">Underwear</option>
+                        <option value="dress">Dress</option>
+                        <option value="shorts">Shorts</option>
+                        <option value="skirt">Skirt</option>
+                    </select>
+                </div>
+
+                <!-- Inspection Status -->
+                <div class="form-group" style="margin-bottom: 0.8rem;">
+                    <label for="statusSelect">Inspection Status</label>
+                    <select id="statusSelect">
+                        <option value="clean">✓ Clean (No Defects)</option>
+                        <option value="defective">⚠ Defective (Flagged)</option>
+                    </select>
+                </div>
+
+                <!-- Detected Defects -->
+                <label style="margin-bottom: 0.25rem;">Detected Defects &amp; Anomalies</label>
+                <div class="defects-list" id="defectsList" style="margin-bottom: 0.8rem; max-height: 140px;">
+                    <div style="text-align: center; color: var(--text-secondary); padding: 1.5rem 0; font-size: 0.85rem;">
+                        No defects detected yet.
+                    </div>
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="action-row" style="margin-bottom: 0.8rem;">
+                    <button class="btn btn-primary" id="confirmBtn"
+                        style="background: linear-gradient(135deg, var(--color-clean), #047857); box-shadow: 0 4px 18px rgba(16,185,129,0.3);"
+                        disabled>
+                        ✓ Save &amp; Confirm
+                    </button>
+                    <button class="btn btn-secondary" id="resetBtn" disabled>Reset</button>
+                </div>
+
+                <!-- Stats Bar -->
+                <div class="stats-grid">
+                    <div class="stat-box" style="padding: 0.6rem 0.4rem;">
+                        <div class="stat-value" id="statsTotal">0</div>
+                        <div class="stat-label" style="font-size: 0.65rem;">Total Items</div>
+                    </div>
+                    <div class="stat-box" style="padding: 0.6rem 0.4rem;">
+                        <div class="stat-value" id="statsPending" style="color: var(--color-warn);">0</div>
+                        <div class="stat-label" style="font-size: 0.65rem;">Sync Queue</div>
+                    </div>
+                    <div class="stat-box" style="padding: 0.6rem 0.4rem;">
+                        <div class="stat-value" id="statsDefects" style="color: var(--color-defect);">0</div>
+                        <div class="stat-label" style="font-size: 0.65rem;">Defects</div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <script src="/static/app.js?v=4"></script>
+</body>
+</html>

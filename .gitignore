@@ -1,0 +1,45 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# Datasets and Large Zip Archives
+dataset/
+*.zip
+
+# YOLO / PyTorch Model Weights and Exports
+*.pt
+*.ts
+runs/
+results/
+
+# Databases
+*.db
+*.db-journal
+
+# Log Files
+*.log
+logs/
+
+# Uploads directory contents (but keep the folder)
+cloud/uploads/*
+!cloud/uploads/.gitkeep
+
+# Edge captures (generated scan images)
+edge/static/captures/*
+!edge/static/captures/.gitkeep
+
+# Launcher scripts (local convenience)
+start_*.bat
+start_*.ps1
+
+# OS / Editor configurations
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Cloud Central Operations dashboard for garment defect monitoring and Edge unit management.">
+    <title>Cloud — Garment Operations Central</title>
+    <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+    <!-- ── Header ── -->
+    <header>
+        <div class="logo-container">
+            <div class="logo-icon">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M17.5 19A3.5 3.5 0 0 0 21 15.5c0-2.79-2.54-4.5-5-4.5-.47 0-.89.09-1.3.26A7 7 0 1 0 3 13.5A3.5 3.5 0 0 0 6.5 17H17"/>
+                </svg>
+            </div>
+            <h1>Garment Operations Central</h1>
+        </div>
+        <div style="display: flex; gap: 0.75rem; align-items: center;">
+            <div class="status-badge" style="border-color: rgba(16, 185, 129, 0.2); background: rgba(16, 185, 129, 0.05);">
+                <span class="status-dot"></span>
+                <span style="color: #10b981; font-weight: 700;">Cloud DB Online</span>
+            </div>
+            <div class="status-badge" id="lastRefreshBadge">
+                <span>Last sync:</span>
+                <span id="lastRefreshTime" style="color: var(--text-primary); font-weight: 700; margin-left: 4px;">—</span>
+            </div>
+        </div>
+    </header>
+
+    <div class="page-wrapper">
+
+        <!-- ── Metric Cards ── -->
+        <div class="metrics-grid">
+            <div class="metric-card" style="--card-accent: var(--accent);">
+                <div class="metric-icon" style="color: var(--accent);">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                        <polyline points="14 2 14 8 20 8"/>
+                        <line x1="16" y1="13" x2="8" y2="13"/>
+                        <line x1="16" y1="17" x2="8" y2="17"/>
+                        <polyline points="10 9 9 9 8 9"/>
+                    </svg>
+                </div>
+                <div class="metric-value" id="lblTotalScans">0</div>
+                <div class="metric-label">Total Garments Inspected</div>
+                <div class="metric-sub">All devices, all time</div>
+            </div>
+            <div class="metric-card" style="--card-accent: var(--color-defect);">
+                <div class="metric-icon" style="color: var(--color-defect);">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="20" x2="18" y2="10"/>
+                        <line x1="12" y1="20" x2="12" y2="4"/>
+                        <line x1="6" y1="20" x2="6" y2="14"/>
+                    </svg>
+                </div>
+                <div class="metric-value" id="lblDefectPercent" style="color: var(--color-defect);">0%</div>
+                <div class="metric-label">Average Defect Rate</div>
+                <div class="metric-sub">Across all Edge units</div>
+            </div>
+            <div class="metric-card" style="--card-accent: var(--color-clean);">
+                <div class="metric-icon" style="color: var(--color-clean);">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                        <polyline points="22 4 12 14.01 9 11.01"/>
+                    </svg>
+                </div>
+                <div class="metric-value" id="lblCleanCount" style="color: var(--color-clean);">0</div>
+                <div class="metric-label">Clean (Passed) Items</div>
+                <div class="metric-sub">Quality assured</div>
+            </div>
+            <div class="metric-card" style="--card-accent: var(--color-defect);">
+                <div class="metric-icon" style="color: var(--color-defect);">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/>
+                        <line x1="12" y1="9" x2="12" y2="13"/>
+                        <line x1="12" y1="17" x2="12.01" y2="17"/>
+                    </svg>
+                </div>
+                <div class="metric-value" id="lblDefectCount" style="color: var(--color-defect);">0</div>
+                <div class="metric-label">Defects Flagged</div>
+                <div class="metric-sub">Anomalies identified</div>
+            </div>
+        </div>
+
+        <!-- Tab Switches -->
+        <div class="tabs-container">
+            <button class="refresh-btn active" id="btnTabDashboard" onclick="switchTab('dashboard')">
+                📊 Dashboard View
+            </button>
+            <button class="refresh-btn" id="btnTabActiveLearning" onclick="switchTab('active-learning')">
+                🧠 Active Learning Studio
+            </button>
+        </div>
+
+        <!-- ── Main Layout (Dashboard View) ── -->
+        <div id="dashboardView" class="main-layout">
+
+            <!-- ── Left: Garment Gallery ── -->
+            <section class="glass-card" style="min-height: 500px;">
+                <div class="card-header">
+                    <span>Inspected Garments Log</span>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <button class="refresh-btn" id="btnSelectAll" onclick="selectAllGarments()">☑ Select All</button>
+                        <button class="refresh-btn" id="btnDeselectAll" onclick="deselectAllGarments()" style="display:none;">☒ Deselect All</button>
+                        <button class="refresh-btn" id="btnDeleteSelected" onclick="deleteSelectedGarments()" style="background: rgba(239, 68, 68, 0.1); color: #f87171; border-color: rgba(239, 68, 68, 0.25); display: none;">
+                            🗑 Delete Selected (0)
+                        </button>
+                        <button class="refresh-btn" onclick="fetchCloudData()">↻ Refresh</button>
+                    </div>
+                </div>
+                <div class="defect-gallery" id="garmentGallery">
+                    <div style="grid-column: 1/-1; text-align: center; color: var(--text-secondary); padding: 4rem 0; font-size: 0.9rem;">
+                        <span class="spinner"></span>
+                        <div style="margin-top: 1rem;">Loading garments from central server...</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ── Right: Sidebar ── -->
+            <div style="display: flex; flex-direction: column; gap: 1.4rem;">
+
+                <!-- Edge Units Monitor -->
+                <section class="glass-card">
+                    <div class="card-header">
+                        <span>Edge Units</span>
+                        <span id="deviceCountBadge" style="font-size: 0.75rem; background: rgba(59,130,246,0.08); border: 1px solid rgba(59,130,246,0.25); padding: 2px 8px; border-radius: 20px; color: var(--cyan); font-weight: 700; text-transform: none; letter-spacing: 0;">0 active</span>
+                    </div>
+                    <div id="deviceList">
+                        <div style="text-align: center; color: var(--text-secondary); padding: 1.5rem 0; font-size: 0.88rem;">
+                            No devices registered yet.
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Defect Type Statistics -->
+                <section class="glass-card">
+                    <div class="card-header">
+                        <span>Defect Breakdown</span>
+                    </div>
+                    <div id="defectStatsList">
+                        <div style="text-align: center; color: var(--text-secondary); padding: 1.5rem 0; font-size: 0.88rem;">
+                            No defect data yet.
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Recent Activity -->
+                <section class="glass-card">
+                    <div class="card-header">
+                        <span>Recent Activity</span>
+                    </div>
+                    <div class="activity-ticker" id="activityTicker">
+                        <div style="text-align: center; color: var(--text-secondary); font-size: 0.85rem; padding: 1rem 0;">
+                            No recent activity.
+                        </div>
+                    </div>
+                </section>
+
+            </div>
+        </div>
+
+        <!-- ── Active Learning Studio View ── -->
+        <div id="activeLearningView" style="display: none;">
+            <div class="main-layout" style="grid-template-columns: 2fr 1fr;">
+                
+                <!-- Left: Labeling Workspace -->
+                <section class="glass-card" style="min-height: 550px; padding: 1.5rem; position: relative;">
+                    <div class="card-header">
+                        <span>Collaborative Labeling Workspace</span>
+                        <span id="labelingItemName" style="font-size: 0.8rem; text-transform: none; color: var(--text-secondary);">Select an item from the queue to start</span>
+                    </div>
+
+                    <!-- Canvas Editor -->
+                    <div style="position: relative; width: 100%; aspect-ratio: 4/3; background: #000; border-radius: 16px; overflow: hidden; border: 1px solid var(--panel-border); margin-bottom: 1.2rem; display: flex; align-items: center; justify-content: center; box-shadow: inset 0 2px 10px rgba(0,0,0,0.8);">
+                        <canvas id="labelingCanvas" style="position: absolute; inset:0; width: 100%; height: 100%; cursor: crosshair; z-index: 5; display: none;"></canvas>
+                        <div id="labelingPlaceholder" style="text-align: center; color: var(--text-secondary); font-size: 0.88rem; display: flex; flex-direction: column; align-items: center; gap: 0.8rem; z-index: 2;">
+                            <span style="font-size: 2.5rem; opacity: 0.5;">📷</span>
+                            <span>Click an item in the queue below to load it into the workspace</span>
+                        </div>
+                    </div>
+
+                    <!-- Editor Controls -->
+                    <div style="display: flex; gap: 0.8rem; align-items: flex-end; margin-bottom: 1.2rem; background: rgba(5,8,20,0.4); padding: 1rem; border-radius: 12px; border: 1px solid var(--panel-border);">
+                        <div style="flex: 1;">
+                            <label style="font-size: 0.72rem; margin-bottom: 6px; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; display: block;">Box Label Assign</label>
+                            <select id="labelSelect" style="width: 100%; padding: 0.75rem 1rem; background: rgba(0,0,0,0.4); border: 1px solid var(--panel-border); border-radius: 8px; color: var(--text-primary); outline: none; font-family: inherit; font-size: 0.88rem; transition: border-color 0.25s ease;">
+                                <option value="stain">⚠ STAIN (Defect)</option>
+                                <option value="hole">⚠ HOLE (Defect)</option>
+                                <option value="tear">⚠ TEAR (Defect)</option>
+                                <option value="broken_button">⚠ BROKEN BUTTON (Defect)</option>
+                                <option value="shirt">👕 SHIRT (Garment)</option>
+                                <option value="jacket">🧥 JACKET (Garment)</option>
+                                <option value="jeans">👖 JEANS (Garment)</option>
+                                <option value="shorts">🩳 SHORTS (Garment)</option>
+                                <option value="skirt">👗 SKIRT (Garment)</option>
+                                <option value="dress">💃 DRESS (Garment)</option>
+                            </select>
+                        </div>
+                        <button class="refresh-btn" onclick="clearSelectedBox()" style="background: rgba(239, 68, 68, 0.1); color: #f87171; border-color: rgba(239, 68, 68, 0.25); height: 42px; border-radius: 8px; font-weight: 700; transition: all 0.2s ease;">
+                            🗑 Delete Selected Box
+                        </button>
+                    </div>
+
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-size: 0.75rem; color: var(--text-muted);">Click &amp; drag on the image above to draw new bounding boxes.</span>
+                        <button class="refresh-btn" id="btnSubmitCorrection" onclick="submitLabelCorrection()" style="background: var(--color-clean); color: #fff; border-color: var(--color-clean); padding: 0.7rem 1.6rem; font-weight: 700; border-radius: 8px; box-shadow: 0 4px 14px var(--color-clean-glow);" disabled>
+                            ✓ Save &amp; Add to Retraining Pool
+                        </button>
+                    </div>
+                </section>
+
+                <!-- Right: Active Learning Dashboard & Queue -->
+                <div style="display: flex; flex-direction: column; gap: 1.4rem;">
+                    
+                    <!-- Retraining Control Panel -->
+                    <section class="glass-card">
+                        <div class="card-header">
+                            <span>Active Learning Model Control</span>
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 1rem; font-size: 0.85rem;">
+                            <div style="display:flex; justify-content:space-between; border-bottom: 1px solid var(--panel-border); padding-bottom: 0.6rem;">
+                                <span style="color: var(--text-secondary);">Active Model:</span>
+                                <span id="txtModelVersion" style="font-weight: 700; color: var(--cyan);">YOLO26s v1.0.0</span>
+                            </div>
+                            <div style="display:flex; justify-content:space-between; border-bottom: 1px solid var(--panel-border); padding-bottom: 0.6rem;">
+                                <span style="color: var(--text-secondary);">Stain vs Hole Accuracy:</span>
+                                <span id="txtStainAccuracy" style="font-weight: 700; color: var(--color-defect);">65.2% (Unreliable)</span>
+                            </div>
+                            <div style="display:flex; justify-content:space-between; border-bottom: 1px solid var(--panel-border); padding-bottom: 0.6rem;">
+                                <span style="color: var(--text-secondary);">Pending Corrections:</span>
+                                <span id="txtPoolSize" style="font-weight: 700; color: var(--color-warn);">0 annotations</span>
+                            </div>
+
+                            <button class="refresh-btn" id="btnRunRetrain" onclick="runMockRetraining()" style="margin-top: 0.5rem; background: linear-gradient(135deg, var(--accent), var(--cyan)); color: #fff; font-weight:700; padding: 0.85rem; border: none; box-shadow: 0 6px 20px rgba(37,99,235,0.3); border-radius: 10px; transition: all 0.25s ease; cursor: pointer;">
+                                🧠 Trigger Active Learning Retrain
+                            </button>
+                            <button class="refresh-btn" id="btnResetModel" onclick="resetModelVersion()" style="display: none; background: rgba(255,255,255,0.03); color: var(--text-secondary); border-color: var(--panel-border); padding: 0.55rem; font-size:0.75rem; border-radius: 8px; font-weight: 600; margin-top: 0.3rem;">
+                                ⟲ Reset Model to Factory v1.0.0
+                            </button>
+
+                            <!-- Retrain Progress Log overlay -->
+                            <div id="retrainProgressContainer" style="display: none; margin-top: 0.5rem;">
+                                <div style="display:flex; justify-content:space-between; margin-bottom:6px; font-size: 0.72rem; font-weight: 700;">
+                                    <span id="txtRetrainProgress" style="color: var(--cyan);">Initializing GPU...</span>
+                                    <span id="txtRetrainPercent">0%</span>
+                                </div>
+                                <div style="width:100%; height:6px; background: rgba(255,255,255,0.05); border-radius:100px; overflow:hidden; margin-bottom: 0.8rem;">
+                                    <div id="barRetrainProgress" style="width: 0%; height:100%; background: var(--cyan); transition: width 0.2s ease;"></div>
+                                </div>
+                                <div id="retrainLogs" style="background: #04060b; border: 1px solid var(--panel-border); padding: 10px; border-radius: 8px; font-family: monospace; font-size: 0.68rem; color: #8ba2c0; max-height: 140px; overflow-y: auto; white-space: pre-wrap; height: 120px;"></div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- Collaborative Labeling Queue -->
+                    <section class="glass-card" style="flex: 1; min-height: 300px;">
+                        <div class="card-header">
+                            <span>Labeling Studio Queue</span>
+                            <span id="labelingQueueBadge" style="font-size: 0.72rem; background: rgba(245,158,11,0.08); border: 1px solid rgba(245,158,11,0.25); padding: 2px 8px; border-radius: 20px; color: var(--color-warn); font-weight: 700; text-transform: none; letter-spacing: 0;">0 items</span>
+                        </div>
+                        <div id="labelingQueueList" style="display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto;">
+                            <div style="text-align: center; color: var(--text-secondary); padding: 2rem 0; font-size: 0.85rem;">
+                                Loading queue...
+                            </div>
+                        </div>
+                    </section>
+
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/dashboard.js?v=2"></script>
+</body>
+</html>

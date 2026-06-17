@@ -1,0 +1,8 @@
+# Requirements for Garment Inspection and Tracking System (YOLO26 / YOLOE-26)
+# Install via: pip install -r requirements.txt
+
+# Core computer vision framework (includes YOLO26 and YOLOE-26 models)
+ultralytics==8.4.66
+
+# PyTorch (requires torch, torchvision). Installed separately if CUDA acceleration is needed.
+# For CUDA 12.1 on Windows: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
