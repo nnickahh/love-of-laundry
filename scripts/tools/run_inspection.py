@@ -6,7 +6,7 @@ on a single image, a folder of images, or a live webcam feed.
 
 Usage:
   python run_inspection.py                          # live webcam
-  python run_inspection.py --source test_clothing.png
+  python scripts/tools/run_inspection.py --source assets/test_clothing.png
   python run_inspection.py --source dataset/raw/shirt/
   python run_inspection.py --source video.mp4
 """

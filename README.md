@@ -58,11 +58,11 @@ If you wish to modify the dataset or retrain the custom model:
    ```
 2. **Download Datasets** (downloads and balances the Roboflow clothing datasets):
    ```powershell
-   python download_roboflow.py
+   python scripts/training/download_roboflow.py
    ```
 3. **Train the Model**:
    ```powershell
-   python merge_and_train.py
+   python scripts/training/merge_and_train.py
    ```
 
 ---
@@ -81,7 +81,7 @@ Starts the edge node capturing frames at [http://localhost:8000/static/index.htm
 # Windows PowerShell
 $env:DEVICE_ID="Van-01"
 $env:CLOUD_URL="http://localhost:8080"
-$env:CAMERA_SOURCE="test_clothing.png" # Or a camera index e.g., "0"
+$env:CAMERA_SOURCE="assets/test_clothing.png" # Or a camera index e.g., "0"
 .venv\Scripts\python -m uvicorn edge.main:app --port 8000
 ```
 
@@ -91,6 +91,6 @@ $env:CAMERA_SOURCE="test_clothing.png" # Or a camera index e.g., "0"
 
 To verify the integration between Edge and Cloud servers automatically, run the integration suite:
 ```powershell
-python verify_system.py
+python scripts/tools/verify_system.py
 ```
 This script launches mock instances of both servers, triggers a garment scan at the edge, verifies background database synchronization, and reports the status.

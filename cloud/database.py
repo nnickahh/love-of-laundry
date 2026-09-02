@@ -140,6 +140,7 @@ def get_all_garments(limit=50) -> list:
         } for d in cursor.fetchall()]
         
         garments.append({
+            "id": g_id,
             "garment_id": g_id,
             "device_id": r["device_id"],
             "device_name": r["device_name"],

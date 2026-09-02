@@ -33,7 +33,7 @@ def run_detection(model, image_path, classes, conf_threshold, save_name):
     print(f"Visualized result saved to: {output_path}")
 
 def main():
-    image_path = "test_clothing.png"
+    image_path = "assets/test_clothing.png"
     if not os.path.exists(image_path):
         print(f"Error: Test image '{image_path}' not found. Please place a test image in the directory.")
         return

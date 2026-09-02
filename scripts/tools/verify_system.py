@@ -10,7 +10,7 @@ Steps to test manually:
   2. Open a second PowerShell terminal and start the Edge Local Server:
      set DEVICE_ID=Van-01
      set CLOUD_URL=http://localhost:8080
-     set CAMERA_SOURCE=test_clothing.png
+      set CAMERA_SOURCE=assets/test_clothing.png
      .venv\\Scripts\\python -m uvicorn edge.main:app --port 8000 --reload
      
   3. Open your browser:
@@ -52,7 +52,7 @@ def test_integration():
     env = os.environ.copy()
     env["DEVICE_ID"] = "Test-Van-99"
     env["CLOUD_URL"] = "http://localhost:8080"
-    env["CAMERA_SOURCE"] = "test_clothing.png" # use the local image as static source
+    env["CAMERA_SOURCE"] = "assets/test_clothing.png"
     
     edge_proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "edge.main:app", "--port", "8000"],
