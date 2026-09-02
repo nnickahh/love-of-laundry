@@ -16,39 +16,41 @@ RAW_DIR = "dataset/raw"
 # ── Class-specific search queries ────────────────────────────────────────────
 QUERIES = {
     "shirt": [
+        "school uniform shirt white collared flat lay",
+        "school uniform polo shirt flat lay clothing",
+        "formal button down shirt flat lay clothing",
         "t-shirt flat lay product photo",
-        "white t-shirt flat lay clothing",
+        "white collared dress shirt flat lay",
         "polo shirt flat lay photography",
-        "blue t-shirt flat lay clothing product",
-        "black t-shirt flat lay isolated",
+        "short sleeve school uniform shirt flat lay",
     ],
     "jacket": [
-        "jacket flat lay clothing product photo",
-        "hoodie flat lay photography clothing",
-        "winter coat flat lay product photography",
+        "winter jacket flat lay clothing product photo",
+        "hoodie sweater flat lay photography clothing",
+        "winter coat thick outerwear flat lay",
         "denim jacket flat lay clothing",
-        "bomber jacket flat lay isolated",
+        "bomber jacket zipper flat lay isolated",
     ],
     "jeans": [
+        "school uniform pants trousers slacks flat lay",
+        "black school trousers flat lay clothing",
+        "navy blue uniform pants flat lay",
         "jeans flat lay product photography",
         "denim pants flat lay clothing",
-        "blue jeans flat lay white background",
-        "jeans trousers flat lay clothing",
-        "black jeans flat lay product photo",
+        "chinos slacks trousers flat lay white background",
     ],
     "underwear": [
         "underwear flat lay product photography",
-        "bra lingerie flat lay clothing",
         "boxer briefs flat lay product photo",
         "underwear briefs flat lay white background",
         "socks pair flat lay product photo",
     ],
     "dress": [
-        "dress flat lay product photography",
+        "women dress flat lay product photography",
         "sundress flat lay clothing white background",
-        "skirt flat lay product photo",
-        "floral dress flat lay isolated",
-        "blouse shirt flat lay clothing product",
+        "floral maxi dress flat lay isolated",
+        "evening gown dress flat lay clothing",
+        "one piece dress flat lay product",
     ],
     "hole": [
         "shirt with hole damage clothing",
@@ -111,7 +113,7 @@ def scrape_class(class_name: str, queries: list[str], max_per_query: int = MAX_P
 
     total = len([f for f in os.listdir(out_dir)
                  if f.lower().endswith(('.jpg', '.jpeg', '.png', '.webp', '.bmp'))])
-    print(f"  [{class_name}] ✓ Total images: {total}")
+    print(f"  [{class_name}] Total images: {total}")
     return total
 
 

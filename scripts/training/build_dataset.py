@@ -13,7 +13,22 @@ from pathlib import Path
 # ── Config ──────────────────────────────────────────────────────────────────
 LABELLED_DIR  = "dataset/labelled"
 YOLO_DATASET  = "dataset/yolo"
-CLASSES       = ["shirt", "jacket", "jeans", "underwear", "dress", "hole", "tear", "stain"]
+# Love of Laundry garment categories
+CLASSES       = [
+    "t-shirt",      #tops
+    "blouse",       
+    "shirt",        
+    "vest",         
+    "sweater",      
+    "shorts",       #bottoms
+    "skirt",        
+    "pants",        
+    "jacket",       #outerwear
+    "winter_jacket",
+    "dress",        #dresses
+    "evening_dress",
+    "gown"
+]
 TRAIN_RATIO   = 0.70
 VAL_RATIO     = 0.20
 TEST_RATIO    = 0.10

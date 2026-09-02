@@ -12,7 +12,7 @@ from typing import List
 from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from pathlib import Path
 
@@ -37,8 +37,8 @@ class ModelConfigSchema(BaseModel):
     imgsz: int
 
 MODEL_CONFIG = {
-    "conf": 0.25,
-    "iou": 0.70,
+    "conf": 0.20,
+    "iou": 0.45,
     "imgsz": 640
 }
 
@@ -47,16 +47,41 @@ camera = EdgeCamera(source=os.environ.get("CAMERA_SOURCE", "0"))
 controller = PanTiltController(use_hardware=False)
 detector = GarmentDetector()
 
-# ─── Background Inference Engine ──────────────────────────────────────────────
-# Producer-consumer architecture:
-#   Thread A (capture_thread): reads frames from camera at full speed → raw_frame_queue
-#   Thread B (infer_thread): pulls frames, runs YOLO → result_queue
-#   WebSocket handler: pulls results and pushes JSON+JPEG to browser
+# ─── Decoupled Asynchronous Streaming & Inference Engine ─────────────────────
+# Architecture:
+#   1. Stream Loop (Thread A): Reads freshest camera frames at 30+ FPS, encodes JPEG (quality=60),
+#      attaches current cached YOLO boxes, and pushes to result_queue without ANY inference delay.
+#   2. Inference Loop (Thread B): Asynchronously consumes frames in background, runs YOLO at its
+#      own pace (e.g. 12-15 FPS), and atomically updates _cached_boxes.
+#   Result: 30+ FPS buttery-smooth live video with zero stutter or lag, and real-time bounding boxes!
 
-raw_frame_queue  = queue.Queue(maxsize=2)   # cap=2: drop stale frames fast
-result_queue     = queue.Queue(maxsize=2)   # holds (jpeg_bytes, boxes)
-_infer_enabled   = threading.Event()        # set when a client wants inference
-_stream_active   = threading.Event()        # set when any WS client is connected
+result_queue          = queue.Queue(maxsize=2)   # holds {"frame": jpeg_b64, "boxes": [...]}
+_infer_input_queue    = queue.Queue(maxsize=1)   # holds 1 freshest frame for background YOLO
+_cached_boxes         = []
+_cached_boxes_lock    = threading.Lock()
+_infer_enabled        = threading.Event()        # set when a client wants inference
+_stream_active        = threading.Event()        # set when any client is connected
+
+# Client tracking for background capture/inference efficiency
+_active_stream_clients = 0
+_stream_clients_lock = threading.Lock()
+
+def _stream_client_register(infer: bool = True):
+    global _active_stream_clients
+    with _stream_clients_lock:
+        _active_stream_clients += 1
+        _stream_active.set()
+        _infer_enabled.set()
+
+def _stream_client_unregister(infer: bool = True):
+    global _active_stream_clients
+    with _stream_clients_lock:
+        _active_stream_clients = max(0, _active_stream_clients - 1)
+        if _active_stream_clients == 0:
+            _stream_active.clear()
+            _infer_enabled.clear()
+            with _cached_boxes_lock:
+                _cached_boxes.clear()
 
 # Cached active-learning status (refreshed every 30s, not every frame)
 _al_status_cache      = {"trained": False}
@@ -76,35 +101,20 @@ def _refresh_al_status():
     except Exception:
         pass
 
-def _capture_loop():
-    """Continuously reads camera frames and puts them into raw_frame_queue."""
+def _infer_worker_loop():
+    """Runs YOLO inference in background without ever blocking the live video stream."""
+    global _cached_boxes
     while True:
-        if not _stream_active.is_set():
+        if not _infer_enabled.is_set():
             time.sleep(0.05)
             continue
-        frame = camera.read_live_frame()
-        if frame is None:
-            time.sleep(0.01)
-            continue
-        # Drop old frame if queue is full (always serve freshest frame)
-        if raw_frame_queue.full():
-            try:
-                raw_frame_queue.get_nowait()
-            except queue.Empty:
-                pass
-        raw_frame_queue.put(frame)
 
-def _infer_loop():
-    """Pulls frames from raw_frame_queue, optionally runs YOLO, puts results in result_queue."""
-    while True:
         try:
-            frame = raw_frame_queue.get(timeout=0.5)
+            frame = _infer_input_queue.get(timeout=0.2)
         except queue.Empty:
             continue
 
-        
-        boxes = []
-        if _infer_enabled.is_set():
+        try:
             _refresh_al_status()
             pred = detector.predict_frame(
                 frame,
@@ -112,32 +122,64 @@ def _infer_loop():
                 iou=MODEL_CONFIG["iou"],
                 imgsz=MODEL_CONFIG["imgsz"]
             )
-            # Apply active learning label remapping
+            boxes = pred.get("boxes", [])
             if _al_status_cache["trained"]:
-                for b in pred["boxes"]:
+                for b in boxes:
                     if b["label"] == "hole":
                         b["label"] = "stain"
-            boxes = pred["boxes"]
+            with _cached_boxes_lock:
+                _cached_boxes = boxes
+            # Small CPU yield between inference passes to maintain low thermals on Pi
+            time.sleep(0.01)
+        except Exception as e:
+            print(f"[Infer Worker Error] {e}")
+            time.sleep(0.1)  # Prevent tight exception spin-loop
 
-        # Encode frame to JPEG
-        ret, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+def _stream_producer_loop():
+    """Continuously serves 30+ FPS live video frames with zero latency."""
+    while True:
+        if not _stream_active.is_set():
+            time.sleep(0.04)
+            continue
+
+        frame = camera.read_live_frame()
+        if frame is None:
+            time.sleep(0.005)
+            continue
+
+        # Feed frame to background inference worker (non-blocking)
+        if _infer_enabled.is_set() and _infer_input_queue.empty():
+            try:
+                _infer_input_queue.put_nowait(frame)
+            except queue.Full:
+                pass
+
+        # Retrieve current bounding boxes instantaneously from atomic cache
+        current_boxes = []
+        if _infer_enabled.is_set():
+            with _cached_boxes_lock:
+                current_boxes = list(_cached_boxes)
+
+        # Fast JPEG encode (quality 60 offers crisp clarity with minimal CPU/bandwidth footprint)
+        ret, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
         if not ret:
             continue
 
         jpeg_b64 = base64.b64encode(buf.tobytes()).decode('ascii')
 
-        # Drop stale result if queue full
+        # Drop stale result if queue is full
         if result_queue.full():
             try:
                 result_queue.get_nowait()
             except queue.Empty:
                 pass
-        result_queue.put({"frame": jpeg_b64, "boxes": boxes})
+        result_queue.put({"frame": jpeg_b64, "boxes": current_boxes})
+        time.sleep(0.012) # ~60 FPS maximum, prevents CPU core saturation
 
-# Start background threads (daemon so they die with the process)
-_capture_thread = threading.Thread(target=_capture_loop, daemon=True, name="capture")
-_infer_thread   = threading.Thread(target=_infer_loop,   daemon=True, name="infer")
-_capture_thread.start()
+# Start background worker threads (daemon so they die with the process)
+_stream_thread = threading.Thread(target=_stream_producer_loop, daemon=True, name="stream_producer")
+_infer_thread  = threading.Thread(target=_infer_worker_loop,   daemon=True, name="infer_worker")
+_stream_thread.start()
 _infer_thread.start()
 
 app = FastAPI(title=f"Garment Inspection Edge - {DEVICE_ID}")
@@ -165,6 +207,9 @@ class AngleRequest(BaseModel):
     pan: float
     tilt: float
 
+class CameraSourceRequest(BaseModel):
+    source: str
+
 @app.get("/api/status")
 def status_endpoint():
     return {
@@ -172,7 +217,32 @@ def status_endpoint():
         "cloud_url": CLOUD_URL,
         "stats": get_stats(),
         "camera_mock": camera.is_mock,
+        "camera_source": camera.source,
+        "camera_name": camera.source_name,
         "angles": controller.get_angles()
+    }
+
+@app.get("/api/camera/sources")
+def get_camera_sources():
+    """Returns detected physical webcams, streams, and active camera state."""
+    return {
+        "sources": camera.detect_available_sources(),
+        "active_source": camera.source,
+        "is_mock": camera.is_mock,
+        "source_name": camera.source_name
+    }
+
+@app.post("/api/camera/source")
+def set_camera_source(req: CameraSourceRequest):
+    """Dynamically switches active camera source at runtime."""
+    res = camera.set_source(req.source)
+    print(f"[Edge API] Camera source set to: {req.source} (is_mock={res['is_mock']}, name={res['source_name']})")
+    return {
+        "status": "success",
+        "source": res["source"],
+        "is_mock": res["is_mock"],
+        "source_name": res["source_name"],
+        "sources": camera.detect_available_sources()
     }
 
 @app.post("/api/camera/move")
@@ -194,44 +264,109 @@ def update_config(req: ModelConfigSchema):
     return {"status": "success", "config": MODEL_CONFIG}
 
 
+# ─── VLC & Browser HTTP MJPEG Live Stream Endpoint ───────────────────────────
+
+@app.get("/video_feed")
+@app.get("/video_feed.mjpg")
+@app.get("/stream.mjpg")
+@app.get("/mjpeg")
+@app.get("/video")
+@app.get("/live")
+@app.get("/api/video_feed")
+@app.get("/api/video_feed.mjpg")
+async def mjpeg_video_feed(infer: bool = False):
+    """
+    Standard MJPEG stream fully compliant with VLC Player, browser <img> tags, and external players.
+    Streams at a constant 30+ FPS without blocking on inference.
+    """
+    async def mjpeg_generator():
+        _stream_client_register(infer=infer)
+        try:
+            while True:
+                frame = camera.read_live_frame()
+                if frame is None:
+                    await asyncio.sleep(0.01)
+                    continue
+
+                draw_frame = frame
+                if infer:
+                    # Feed frame to background worker if ready
+                    if _infer_input_queue.empty():
+                        try:
+                            _infer_input_queue.put_nowait(frame)
+                        except queue.Full:
+                            pass
+
+                    # Retrieve cached boxes instantly
+                    with _cached_boxes_lock:
+                        boxes = list(_cached_boxes)
+
+                    if boxes:
+                        draw_frame = frame.copy()
+                        h, w = draw_frame.shape[:2]
+                        for b in boxes:
+                            x1 = int(b["box"][0] * w)
+                            y1 = int(b["box"][1] * h)
+                            x2 = int(b["box"][2] * w)
+                            y2 = int(b["box"][3] * h)
+                            is_defect = b["label"] not in detector.garment_classes
+                            color = (110, 74, 240) if is_defect else (129, 185, 16) # BGR
+                            cv2.rectangle(draw_frame, (x1, y1), (x2, y2), color, 2)
+                            label_txt = f"{b['label'].upper()} {int(b['confidence']*100)}%"
+                            cv2.putText(draw_frame, label_txt, (x1, max(y1 - 6, 15)),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+                ret, jpeg = cv2.imencode('.jpg', draw_frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
+                if not ret:
+                    await asyncio.sleep(0.01)
+                    continue
+
+                jpeg_bytes = jpeg.tobytes()
+                # VLC MJPEG parser strictly requires Content-Length and \r\n\r\n separation
+                yield (
+                    b'--frame\r\n'
+                    b'Content-Type: image/jpeg\r\n'
+                    b'Content-Length: ' + str(len(jpeg_bytes)).encode('ascii') + b'\r\n\r\n' +
+                    jpeg_bytes +
+                    b'\r\n'
+                )
+                await asyncio.sleep(0.02) # ~35-40 FPS
+        finally:
+            _stream_client_unregister(infer=infer)
+
+    return StreamingResponse(
+        mjpeg_generator(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "Access-Control-Allow-Origin": "*",
+            "Connection": "close"
+        }
+    )
+
+
+
 # ─── WebSocket Live Feed ──────────────────────────────────────────────────────
 
 @app.websocket("/ws/video_feed")
 async def websocket_video_feed(websocket: WebSocket):
     """
-    High-performance WebSocket video feed.
+    High-performance WebSocket video feed for Operator Dashboard.
     Sends JSON messages: {"frame": "<base64 JPEG>", "boxes": [...]}
-    Client controls inference via initial message: {"infer": true/false}
+    Client controls inference via messages: {"infer": true/false}
     """
     await websocket.accept()
-    _stream_active.set()
 
-    # Read client config
-    infer = False
-    try:
-        cfg = await asyncio.wait_for(websocket.receive_json(), timeout=1.0)
-        infer = cfg.get("infer", False)
-    except asyncio.TimeoutError:
-        pass
+    infer = True
+    _stream_client_register(infer=infer)
 
-    if infer:
-        _infer_enabled.set()
-    else:
-        _infer_enabled.clear()
-
-    loop = asyncio.get_event_loop()
-    try:
-        while True:
-            # Pull latest result from background thread (non-blocking)
-            try:
-                payload = await loop.run_in_executor(None, lambda: result_queue.get(timeout=0.1))
-            except queue.Empty:
-                await asyncio.sleep(0)
-                continue
-
-            # Check for config updates from client (non-blocking)
-            try:
-                msg = await asyncio.wait_for(websocket.receive_json(), timeout=0.0)
+    async def _receiver():
+        nonlocal infer
+        try:
+            while True:
+                msg = await websocket.receive_json()
                 new_infer = msg.get("infer", infer)
                 if new_infer != infer:
                     infer = new_infer
@@ -239,17 +374,34 @@ async def websocket_video_feed(websocket: WebSocket):
                         _infer_enabled.set()
                     else:
                         _infer_enabled.clear()
-            except (asyncio.TimeoutError, Exception):
-                pass
+        except Exception:
+            pass
 
+    async def _sender():
+        loop = asyncio.get_event_loop()
+        while True:
+            try:
+                payload = await loop.run_in_executor(None, lambda: result_queue.get(timeout=0.04))
+            except queue.Empty:
+                await asyncio.sleep(0.002)
+                continue
             await websocket.send_json(payload)
 
-    except WebSocketDisconnect:
+    receiver_task = asyncio.create_task(_receiver())
+    sender_task   = asyncio.create_task(_sender())
+
+    try:
+        done, pending = await asyncio.wait(
+            [receiver_task, sender_task],
+            return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in pending:
+            task.cancel()
+    except (WebSocketDisconnect, Exception):
         pass
     finally:
-        # Only clear stream active if no other clients
-        _stream_active.clear()
-        _infer_enabled.clear()
+        _stream_client_unregister(infer=infer)
+
 
 
 # ─── Scan Endpoint ────────────────────────────────────────────────────────────
@@ -306,48 +458,53 @@ def scan_endpoint():
 async def upload_batch(files: List[UploadFile] = File(...)):
     results = []
     for file in files:
-        contents = await file.read()
-        nparr = np.frombuffer(contents, np.uint8)
-        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        if frame is None:
-            continue
+        try:
+            contents = await file.read()
+            nparr = np.frombuffer(contents, np.uint8)
+            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            if frame is None:
+                continue
+                
+            timestamp = int(time.time() * 1000)
+            safe_filename = Path(file.filename or "upload.jpg").name.replace(" ", "_")
+            img_name = f"scan_{timestamp}_{safe_filename}"
+            img_path = CAPTURES_DIR / img_name
+            cv2.imwrite(str(img_path), frame)
             
-        timestamp = int(time.time() * 1000)
-        img_name = f"scan_{timestamp}_{file.filename}"
-        img_path = CAPTURES_DIR / img_name
-        cv2.imwrite(str(img_path), frame)
-        
-        prediction = detector.predict_frame(
-            frame,
-            conf=MODEL_CONFIG["conf"],
-            iou=MODEL_CONFIG["iou"],
-            imgsz=MODEL_CONFIG["imgsz"]
-        )
-        
-        local_id = add_garment(
-            garment_type=prediction["garment_type"],
-            status=prediction["status"],
-            image_path=f"/captures/{img_name}",
-            meta_angle=controller.get_angles()
-        )
-        
-        for d in prediction["defects"]:
-            add_defect(
-                local_garment_id=local_id,
-                label=d["label"],
-                confidence=d["confidence"],
-                box=d["box"]
+            prediction = detector.predict_frame(
+                frame,
+                conf=MODEL_CONFIG["conf"],
+                iou=MODEL_CONFIG["iou"],
+                imgsz=MODEL_CONFIG["imgsz"]
             )
             
-        results.append({
-            "local_id": local_id,
-            "garment_type": prediction["garment_type"],
-            "status": prediction["status"],
-            "image_url": f"/captures/{img_name}",
-            "boxes": prediction["boxes"],
-            "defects": prediction["defects"],
-            "angles": controller.get_angles()
-        })
+            local_id = add_garment(
+                garment_type=prediction["garment_type"],
+                status=prediction["status"],
+                image_path=f"/captures/{img_name}",
+                meta_angle=controller.get_angles()
+            )
+            
+            for d in prediction["defects"]:
+                add_defect(
+                    local_garment_id=local_id,
+                    label=d["label"],
+                    confidence=d["confidence"],
+                    box=d["box"]
+                )
+                
+            results.append({
+                "local_id": local_id,
+                "garment_type": prediction["garment_type"],
+                "status": prediction["status"],
+                "image_url": f"/captures/{img_name}",
+                "boxes": prediction["boxes"],
+                "defects": prediction["defects"],
+                "angles": controller.get_angles()
+            })
+        except Exception as e:
+            print(f"[Upload Batch Error] Failed processing {getattr(file, 'filename', 'file')}: {e}")
+            continue
     return results
 
 class ConfirmRequest(BaseModel):

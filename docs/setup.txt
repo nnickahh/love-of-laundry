@@ -9,7 +9,7 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 pip install -r requirements.txt
 
 # 4. Download all datasets (including the 17k clothing dataset)
-python download_roboflow.py
+python scripts/training/download_roboflow.py
 
 # 5. Merge, oversample, and kick off training
-python merge_and_train.py
+python scripts/training/merge_and_train.py

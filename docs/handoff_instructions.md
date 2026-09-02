@@ -42,7 +42,7 @@ pip install -r requirements.txt
 Run the download script to retrieve the defect datasets and the new 17,017-image clothing dataset:
 
 ```powershell
-python download_roboflow.py
+python scripts/training/download_roboflow.py
 ```
 
 *This will download `dataset/roboflow/cloth_defect`, `dataset/roboflow/dataset3`, and `dataset/roboflow/clothing_detection_2` using your Roboflow API key.*
@@ -54,7 +54,7 @@ python download_roboflow.py
 Launch the main training script. This script will automatically balance the dataset (oversampling `stain` and other defects to ~1,500+ samples) and run YOLO26s for 100 epochs on your RTX 4060:
 
 ```powershell
-python merge_and_train.py
+python scripts/training/merge_and_train.py
 ```
 
 ### What to expect during training:

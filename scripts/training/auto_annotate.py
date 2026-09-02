@@ -12,7 +12,8 @@ import os
 import shutil
 from pathlib import Path
 from PIL import Image
-from ultralytics import YOLOE
+import torch
+from ultralytics import YOLO
 
 # ── Config ──────────────────────────────────────────────────────────────────
 RAW_DIR    = "dataset/raw"
@@ -43,12 +44,12 @@ VALID_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
 
 def load_model():
-    print("Loading YOLOE-26s model...")
-    return YOLOE("yoloe-26s-seg.pt")
+    print("Loading checked-in YOLO model...")
+    return YOLO("runs/detect/garment_inspector_v2/weights/best.pt")
 
 
 def annotate_image(model, img_path: Path, class_id: int, prompts: list[str],
-                   conf_thresh: float, out_label_path: Path) -> bool:
+                   conf_thresh: float, out_label_path: Path, device) -> bool:
     """Run inference and write YOLO label file. Returns True if any detection saved."""
     try:
         img = Image.open(img_path)
@@ -59,8 +60,7 @@ def annotate_image(model, img_path: Path, class_id: int, prompts: list[str],
         return False
 
     try:
-        model.set_classes(prompts)
-        results = model.predict(str(img_path), device=0, conf=conf_thresh, verbose=False)
+        results = model.predict(str(img_path), device=device, conf=conf_thresh, verbose=False)
     except Exception as e:
         print(f"  Error on {img_path.name}: {e}")
         return False
@@ -95,6 +95,8 @@ def main():
     print("=" * 60)
 
     model = load_model()
+    device = 0 if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
     os.makedirs(LABELLED_DIR, exist_ok=True)
 
     total_annotated = 0
@@ -130,7 +132,7 @@ def main():
 
             shutil.copy2(img_path, dest_img)
             success = annotate_image(
-                model, dest_img, class_id, prompts, conf, label_path)
+                model, dest_img, class_id, prompts, conf, label_path, device)
 
             if success:
                 cls_annotated += 1

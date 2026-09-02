@@ -9,6 +9,7 @@ import os
 import shutil
 import random
 import yaml
+import torch
 from pathlib import Path
 from collections import Counter
 
@@ -20,11 +21,11 @@ RANDOM_SEED = 42
 
 # -- Final unified class list --------------------------------------------------
 FINAL_CLASSES = [
-    "shirt",          # 0  - clothing
-    "jacket",         # 1  - clothing
-    "jeans",          # 2  - clothing
-    "underwear",      # 3  - clothing
-    "dress",          # 4  - clothing
+    "shirt",          # 0  - clothing (tops)
+    "jacket",         # 1  - clothing (tops)
+    "jeans",          # 2  - clothing (bottoms)
+    "underwear",      # 3  - clothing (undergarments)
+    "dress",          # 4  - clothing (one-piece)
     "hole",           # 5  - defect
     "tear",           # 6  - defect
     "stain",          # 7  - defect
@@ -33,8 +34,8 @@ FINAL_CLASSES = [
     "foreign_yarn",   # 10 - defect
     "button_hike",    # 11 - defect
     "swing_error",    # 12 - defect
-    "shorts",         # 13 - clothing
-    "skirt",          # 14 - clothing
+    "shorts",         # 13 - clothing (bottoms)
+    "skirt",          # 14 - clothing (bottoms)
 ]
 
 # Defect class indices
@@ -87,17 +88,16 @@ if os.path.exists(CLOTHING_YAML):
         "remap": {
             0: 4,   # dress -> dress
             1: -1,  # long_hair -> DROPPED
-            2: 2,   # long_pants -> jeans
-            3: 1,   # long_shirt -> jacket
+            2: 2,   # long_pants -> pants/jeans
+            3: 0,   # long_shirt -> shirt (FIXED: was mapped to jacket, causing school uniforms to be detected as jackets)
             4: -1,  # medium_hair -> DROPPED
             5: -1,  # no_hair -> DROPPED
             6: -1,  # no_shirt -> DROPPED
-            7: -1,  # person -> DROPPED
-            8: -1,  # short_hair -> DROPPED
-            9: 13,  # short_pants -> shorts
-            10: 0,  # short_shirt -> shirt
-            11: 14, # skirt -> skirt
-            12: 3,  # sleeveless_shirt -> underwear
+            7: -1,  # short_hair -> DROPPED
+            8: 13,  # short_pants -> shorts
+            9: 0,   # short_shirt -> shirt
+            10: 14, # skirt -> skirt
+            11: 0,  # sleeveless_shirt -> shirt (not underwear)
         }
     })
 
@@ -112,21 +112,55 @@ if os.path.exists(SCRAPED_LABELLED):
         "flat":   True,
     })
 
+# -- DeepFashion clothing dataset ---------------------------------------------
+for df_path in ["dataset/deepfashion", "dataset/deepfashion_converted"]:
+    if os.path.exists(df_path):
+        DF_CLASS_REMAP = {i: i for i in range(15)}  # identity mapping
+        SOURCES.append({
+            "root":   df_path,
+            "label":  "deepfashion",
+            "remap":  DF_CLASS_REMAP,
+        })
+        break
+
+# -- Additional YOLO clothing dataset ------------------------------------------
+YOLO_DIR = "dataset/yolo"
+if os.path.exists(YOLO_DIR):
+    SOURCES.append({
+        "root":   YOLO_DIR,
+        "label":  "yolo_garments",
+        "remap": {
+            0: 0,   # t-shirt -> shirt
+            1: 0,   # blouse -> shirt
+            2: 0,   # shirt -> shirt
+            3: 0,   # vest -> shirt
+            4: 1,   # sweater -> jacket
+            5: 13,  # shorts -> shorts
+            6: 14,  # skirt -> skirt
+            7: 2,   # pants -> jeans/pants
+            8: 1,   # jacket -> jacket
+            9: 1,   # winter_jacket -> jacket
+            10: 4,  # dress -> dress
+            11: 4,  # evening_dress -> dress
+            12: 4,  # gown -> dress
+        }
+    })
+
 VALID_IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
 
 def collect_samples(source: dict) -> list:
     """Collect all (img_path, label_path, remap) tuples from a source."""
-    root   = Path(source["root"])
-    remap  = source["remap"]
-    flat   = source.get("flat", False)
+    root  = Path(source["root"])
+    remap = source["remap"]
+    flat  = source.get("flat", False)
     samples = []
 
     if flat:
-        for cls_dir in root.iterdir():
+        for cls_dir in sorted(root.iterdir()):
             if not cls_dir.is_dir():
                 continue
-            for lbl in cls_dir.glob("*.txt"):
+            for lbl in sorted(cls_dir.glob("*.txt")):
                 img = None
                 for ext in VALID_IMG_EXTS:
                     c = lbl.with_suffix(ext)
@@ -136,12 +170,15 @@ def collect_samples(source: dict) -> list:
                 if img:
                     samples.append((img, lbl, remap))
     else:
-        for split in ["train", "valid", "test", "validation"]:
+        for split in ["train", "val", "valid", "validation", "test"]:
             img_dir = root / split / "images"
             lbl_dir = root / split / "labels"
             if not img_dir.exists():
+                img_dir = root / "images" / split
+                lbl_dir = root / "labels" / split
+            if not img_dir.exists():
                 continue
-            for img in img_dir.iterdir():
+            for img in sorted(img_dir.iterdir()):
                 if img.suffix.lower() not in VALID_IMG_EXTS:
                     continue
                 lbl = lbl_dir / (img.stem + ".txt")
@@ -282,7 +319,10 @@ def main():
     merged = Path(MERGED_DIR)
     if merged.exists():
         print(f"Cleaning previous merged dataset directory: {merged}")
-        shutil.rmtree(merged)
+        import subprocess
+        subprocess.run(["cmd", "/c", "rmdir", "/s", "/q", str(merged)], check=False)
+        if merged.exists():
+            shutil.rmtree(merged, ignore_errors=True)
 
     # Copy files
     print("\nCopying files to merged split structures...")
@@ -294,6 +334,11 @@ def main():
             merged / "labels" / split_name,
         )
         print(f"  {split_name:5}: {n_copied} images written")
+
+    # If one of the splits is empty, make sure the directories still exist
+    for split_name in ["train", "val", "test"]:
+        (merged / "images" / split_name).mkdir(parents=True, exist_ok=True)
+        (merged / "labels" / split_name).mkdir(parents=True, exist_ok=True)
 
     # Write data.yaml
     yaml_path = merged / "data.yaml"
@@ -319,23 +364,43 @@ def main():
     from ultralytics import YOLO
 
     model = YOLO("yolo26s.pt")
-    
-    # Configure for max hardware utilization on Laptop RTX 4060
+
+    use_cuda = torch.cuda.is_available()
+    if use_cuda:
+        device = 0
+        batch = 16
+        workers = 2
+        amp = True
+        print("CUDA available — using GPU training")
+    else:
+        device = "cpu"
+        batch = 16
+        workers = 2
+        amp = False
+        print("CUDA not available — falling back to CPU training (batch=16, workers=2)")
+
+    last_ckpt = Path("runs/detect/garment_inspector_v2/weights/last.pt")
+    resume = last_ckpt.exists()
+    if resume:
+        print(f"Resuming from checkpoint: {last_ckpt}")
+    else:
+        print("No checkpoint found; starting a fresh training run")
+
     results = model.train(
         data     = str(yaml_path),
-        epochs   = 100,
+        epochs   = 20,
         imgsz    = 640,
-        device   = 0,
-        batch    = 16,       # Standard optimized batch for 8GB VRAM to prevent memory thrashing
-        workers  = 2,        # Optimized CPU utilization for Windows multiprocessing to prevent pagefile error 1455
-        amp      = True,     # Float16 Mixed Precision
-        patience = 25,
+        device   = device,
+        batch    = batch,
+        workers  = workers,
+        amp      = amp,
+        patience = 10,
         name     = "garment_inspector_v2",
         exist_ok = True,
         plots    = True,
         save     = True,
         verbose  = True,
-        # Boost classification loss to emphasize minority class classification
+        resume   = resume,
         cls      = 1.5,
     )
 
@@ -349,6 +414,15 @@ def main():
     except Exception:
         pass
     print("=" * 60)
+
+    if best.exists():
+        print("\nExporting best.pt to ONNX format...")
+        try:
+            best_model = YOLO(str(best))
+            best_model.export(format="onnx", imgsz=640, dynamic=False)
+            print(f"  ONNX export successful -> runs/detect/garment_inspector_v2/weights/best.onnx")
+        except Exception as e:
+            print(f"  ONNX export error: {e}")
 
 
 if __name__ == "__main__":

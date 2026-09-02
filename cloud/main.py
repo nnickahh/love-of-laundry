@@ -1,6 +1,7 @@
 import os
 import json
 import shutil
+from datetime import datetime
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from typing import List
 from pydantic import BaseModel
@@ -66,13 +67,24 @@ async def sync_endpoint(
         
     # 3. Save garment scan to central database
     g = sync_data.garment
+    
+    # Auto-correct edge clock drift (e.g. Raspberry Pi running without NTP / on fake-hwclock)
+    now_dt = datetime.now()
+    scan_time = g.created_at
+    try:
+        dt = datetime.fromisoformat(scan_time)
+        if abs((now_dt - dt.replace(tzinfo=None)).total_seconds()) > 7200:
+            scan_time = now_dt.isoformat()
+    except Exception:
+        scan_time = now_dt.isoformat()
+
     cloud_id = add_synced_garment(
         device_id=sync_data.device_id,
         local_id=g.local_id,
         garment_type=g.garment_type,
         status=g.status,
         image_url=f"/uploads/{dst_filename}",
-        created_at=g.created_at,
+        created_at=scan_time,
         meta_angle=g.meta_angle
     )
     
